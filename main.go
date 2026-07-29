@@ -41,11 +41,11 @@ func main() {
 	port := "8080"
   filepath := "."
   mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthcheck)
+	mux.HandleFunc("GET /healthz", healthcheck)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
 	apiCfg := apiConfig{}
-	mux.HandleFunc("/metrics", apiCfg.handlerGetMetrics)
-	mux.HandleFunc("/reset", apiCfg.handlerResetMetrics)
+	mux.HandleFunc("GET /metrics", apiCfg.handlerGetMetrics)
+	mux.HandleFunc("POST /reset", apiCfg.handlerResetMetrics)
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
   server := &http.Server{
 		Addr: ":" + port,
