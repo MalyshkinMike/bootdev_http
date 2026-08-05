@@ -1,5 +1,7 @@
 package main
 
+import _ "github.com/lib/pq"
+
 import (
    "net/http"
    "log"
@@ -7,10 +9,15 @@ import (
 	 "fmt"
 	 "encoding/json"
 	 "strings"
+	 "github.com/joho/godotenv"
+   "os"
+	 "database/sql"
+	 "github.com/MalyshkinMike/bootdev_http/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -106,12 +113,20 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	godotenv.Load()
+	dbUrl := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbUrl)
+	if err != nil {
+		log.Fatalf("Error creating database %v", err)
+		return
+	}
+	queries := database.New(db)
 	port := "8080"
   filepath := "."
   mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", healthcheck)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
-	apiCfg := apiConfig{}
+	apiCfg := apiConfig{ dbQueries: queries }
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerGetMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
