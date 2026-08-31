@@ -7,3 +7,6 @@ values (
   $1
 )
 returning *;
+
+-- name: TruncateUsers :exec
+truncate table users;

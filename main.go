@@ -10,6 +10,8 @@ import (
 	 "encoding/json"
 	 "strings"
 	 "github.com/joho/godotenv"
+	 "github.com/google/uuid"
+	 "time"
    "os"
 	 "database/sql"
 	 "github.com/MalyshkinMike/bootdev_http/internal/database"
@@ -18,6 +20,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries *database.Queries
+	platform string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -38,10 +41,20 @@ func (cfg *apiConfig) handlerGetMetrics(w http.ResponseWriter, _ *http.Request) 
 </html>`, cfg.fileserverHits.Load())))
 }
 
-func (cfg *apiConfig) handlerResetMetrics(w http.ResponseWriter, _ *http.Request) {
+func (cfg *apiConfig) handlerResetMetrics(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform == "dev" {
+		err := cfg.dbQueries.TruncateUsers(r.Context())
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error deleting users: %v", err), err)
+			return
+		}
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+	}
+	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	cfg.fileserverHits.Store(0)
 }
 
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
@@ -112,9 +125,43 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 
 }
 
+type User struct {
+	ID uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email string `json:"email"`
+}
+
+func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
+	type emailBody struct {
+		Email string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	email := emailBody{}
+	err := decoder.Decode(&email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %s", err), err)
+		return
+	}
+	
+	usr, err := cfg.dbQueries.CreateUser(r.Context(), email.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating user: %s", err), err)
+		return
+	}
+	userForSend := User {
+		ID: usr.ID,
+		CreatedAt: usr.CreatedAt,
+		UpdatedAt: usr.UpdatedAt,
+		Email: usr.Email }
+	respondWithJson(w, http.StatusCreated, userForSend)	
+}
+
+
 func main() {
 	godotenv.Load()
 	dbUrl := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		log.Fatalf("Error creating database %v", err)
@@ -126,9 +173,10 @@ func main() {
   mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", healthcheck)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
-	apiCfg := apiConfig{ dbQueries: queries }
+	apiCfg := apiConfig{ dbQueries: queries, platform: platform }
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerGetMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
+	mux.HandleFunc("POST /api/users", apiCfg.createUser)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
   server := &http.Server{
