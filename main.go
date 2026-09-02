@@ -94,7 +94,7 @@ func toChirp(row database.Chirp) Chirp {
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 		Body: row.Body,
-		UserID: row.UserID
+		UserID: row.UserID,
 	}
 }
 
@@ -103,7 +103,7 @@ func toUser(row database.User) User {
 		ID: row.ID,
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
-		Email: row.Email
+		Email: row.Email,
 	}
 }
 
