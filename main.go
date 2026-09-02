@@ -171,6 +171,22 @@ func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	respondWithJson(w, http.StatusOK, chirps)
 }
 
+func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
+	chirp_id := r.PathValue("id")
+	chirp_uuid, err := uuid.Parse(chirp_id)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error converting id to uuid: %v", err), err)
+		return
+	}
+	sqlChirp, err := cfg.dbQueries.GetChirp(r.Context(), chirp_uuid)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Error getting chirp: %v", err), err)
+		return
+	}
+	chirp := toChirp(sqlChirp)
+	respondWithJson(w, http.StatusOK, chirp)
+}
+
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type chirpBody struct {
 		Body string `json:"body"`
@@ -244,6 +260,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
+	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerGetChirp)
 	// mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
