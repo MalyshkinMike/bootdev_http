@@ -102,27 +102,52 @@ func replaceProfaneWords(s string) string {
 	return strings.Join(output, " ")
 }
 
-func validateChirp(w http.ResponseWriter, r *http.Request) {
-	type requestBody struct {
+func validateChirp(body string) bool {
+	if len(body) > 140 {
+		return false
+	}
+	return true
+}
+
+type Chirp struct {
+	ID uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body string `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
+	type chirpBody struct {
 		Body string `json:"body"`
+		UserId uuid.UUID `json:"user_id"`
 	}
-	type regularResponse struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
+	
 	decoder := json.NewDecoder(r.Body)
-	chirp := requestBody{}
+	chirp := chirpBody{}
 	err := decoder.Decode(&chirp)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %s", err), err)
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding json: %v", err), err)
 		return
 	}
-	if len(chirp.Body) > 140 {
-		respondWithError(w, http.StatusBadRequest, "Chirp is too long", nil)
+	if !validateChirp(chirp.Body) {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Chirp is not valid"), nil)
 		return
 	}
-	resp := regularResponse{ CleanedBody: replaceProfaneWords(chirp.Body) }
-	respondWithJson(w, http.StatusOK, resp)
-
+	params := database.CreateChirpParams { Body: chirp.Body, UserID: chirp.UserId }
+	chrp, err := cfg.dbQueries.CreateChirp(r.Context(), params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating chirp: %v", err), err)
+		return
+	}
+	chirpToSend := Chirp {
+		ID: chrp.ID,
+		CreatedAt: chrp.CreatedAt,
+		UpdatedAt: chrp.UpdatedAt,
+		Body: chrp.Body,
+		UserID: chrp.UserID }
+	
+	respondWithJson(w, http.StatusCreated, chirpToSend)
 }
 
 type User struct {
@@ -143,7 +168,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %s", err), err)
 		return
 	}
-	
 	usr, err := cfg.dbQueries.CreateUser(r.Context(), email.Email)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating user: %s", err), err)
@@ -177,7 +201,8 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerGetMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
-	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.createChirp)
+	// mux.HandleFunc("POST /api/validate_chirp", validateChirp)
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
   server := &http.Server{
 		Addr: ":" + port,

@@ -9,4 +9,4 @@ values (
 returning *;
 
 -- name: TruncateUsers :exec
-truncate table users;
+DELETE FROM users;
