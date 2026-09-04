@@ -15,6 +15,7 @@ import (
    "os"
 	 "database/sql"
 	 "github.com/MalyshkinMike/bootdev_http/internal/database"
+	 "github.com/MalyshkinMike/bootdev_http/internal/auth"
 )
 
 
@@ -216,17 +217,27 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
-	type emailBody struct {
+	type userBody struct {
+		Password string `json:"password"`
 		Email string `json:"email"`
 	}
 	decoder := json.NewDecoder(r.Body)
-	email := emailBody{}
-	err := decoder.Decode(&email)
+	user := userBody{}
+	err := decoder.Decode(&user)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %s", err), err)
 		return
 	}
-	usr, err := cfg.dbQueries.CreateUser(r.Context(), email.Email)
+	hashedPassword, err := auth.HashPassword(user.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error hashing password: %v", err), err)
+		return
+	}
+	userParams := database.CreateUserParams { 
+		Email: user.Email, 
+		HashedPassword: hashedPassword, 
+	}
+	usr, err := cfg.dbQueries.CreateUser(r.Context(), userParams)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating user: %s", err), err)
 		return
@@ -235,7 +246,38 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	respondWithJson(w, http.StatusCreated, userForSend)	
 }
 
-
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type loginBody struct {
+		Password string `json:"password"`
+		Email string `json:"email"`
+	}
+	request_body := loginBody {}
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&request_body)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding json body: %v", err), err)
+		return
+	}
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error hashing password: %v", err), err)
+		return
+	}
+	userSql, err := cfg.dbQueries.GetUserByEmail(r.Context(), request_body.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error fetching user from db: %v", err), err)
+		return
+	}
+	match, err := auth.CheckPasswordHash(request_body.Password, userSql.HashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error comparing password: %v", err), err)
+		return
+	}
+	if match {
+		respondWithJson(w, http.StatusOK, toUser(userSql))
+	} else {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", nil)
+	}
+}
 
 
 // main func
@@ -261,6 +303,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerGetChirp)
+  mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	// mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
