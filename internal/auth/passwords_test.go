@@ -6,6 +6,7 @@ import (
 	"strings"
 	"github.com/google/uuid"
 	"time"
+	"net/http"
 )
 
 func TestHashPassword(t *testing.T) {
@@ -141,4 +142,51 @@ func TestValidateJWT(t *testing.T) {
 		t.Error("expected expired token to not return userID")
 	}
 	
+}
+
+func TestGetBearerToken(t *testing.T) {
+	header := http.Header{}
+	errorTextNoHeader := "No Authorization header found"
+	errorTextWrongContent := "Got Invalid Authorization header content"
+	header.Add("Auth", "Bearer invalid_header")
+	token, err := GetBearerToken(header)
+	if err != nil && err.Error() != errorTextNoHeader {
+		t.Fatal(err)
+	}
+	if err == nil {
+		t.Error("expected error No Authorization header found to occur")
+	}
+	if token != "" {
+		t.Error("Expected token to not be returned")
+	}
+	header.Add("Authorization", "Bearer_invalid_token")
+	token, err = GetBearerToken(header)
+	if err != nil && err.Error() != errorTextWrongContent {
+		t.Fatal(err)
+	}
+	if err == nil {
+		t.Error("expected invalid content error to occur")
+	}
+	if token != "" {
+		t.Error("Expected token to not be returned")
+	}
+	header.Set("Authorization", "Bearer invalid token")
+	token, err = GetBearerToken(header)
+	if err != nil && err.Error() != errorTextWrongContent {
+		t.Fatal(err)
+	}
+	if err == nil {
+		t.Error("expected invalid content error to occur")
+	}
+	if token != "" {
+		t.Error("Expected token to not be returned")
+	}
+	header.Set("Authorization", "Bearer valid_token")
+	token, err = GetBearerToken(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "valid_token" {
+		t.Error("Error extracting token. got wrong output")
+	}
 }

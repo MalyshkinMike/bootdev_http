@@ -6,6 +6,8 @@ import (
 	"time"
 	"github.com/golang-jwt/jwt/v5"
 	"errors"
+	"strings"
+	"net/http"
 )
 
 func HashPassword(password string) (string, error) {
@@ -42,4 +44,17 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	} else {
 		return uuid.UUID{}, errors.New("Unknown claims type")
 	}
+}
+
+
+func GetBearerToken(headers http.Header) (string, error) {
+	auth_header := headers.Get("Authorization")
+	if auth_header == "" {
+		return "", errors.New("No Authorization header found")
+	}
+	token := strings.Split(auth_header, " ")
+	if len(token) != 2 {
+		return "", errors.New("Got Invalid Authorization header content")
+	}
+	return token[1], nil
 }

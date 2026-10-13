@@ -25,6 +25,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries *database.Queries
 	platform string
+	secret_string string
 }
 
 type Chirp struct {
@@ -193,10 +194,22 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		Body string `json:"body"`
 		UserId uuid.UUID `json:"user_id"`
 	}
+
+	JWTToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error getting bearer token: %v", err), err)
+		return
+	}
+
+	userId, err := auth.ValidateJWT(JWTToken, cfg.secret_string)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid JWT: %v", err), err)
+		return
+	}
 	
 	decoder := json.NewDecoder(r.Body)
 	chirp := chirpBody{}
-	err := decoder.Decode(&chirp)
+	err = decoder.Decode(&chirp)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding json: %v", err), err)
 		return
@@ -205,7 +218,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Chirp is not valid"), nil)
 		return
 	}
-	params := database.CreateChirpParams { Body: chirp.Body, UserID: chirp.UserId }
+	params := database.CreateChirpParams { Body: chirp.Body, UserID: userId }
 	chrp, err := cfg.dbQueries.CreateChirp(r.Context(), params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating chirp: %v", err), err)
@@ -250,17 +263,26 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type loginBody struct {
 		Password string `json:"password"`
 		Email string `json:"email"`
+		ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
-	request_body := loginBody {}
+	type respondBody struct {
+		ID uuid.UUID `json:"id"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+    Email string `json:"email"`
+    Token string `json:"token"`
+	}
+	request_body := loginBody {
+		ExpiresInSeconds: 3600,
+	}
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&request_body)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding json body: %v", err), err)
 		return
 	}
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error hashing password: %v", err), err)
-		return
+	if request_body.ExpiresInSeconds > 3600 {
+		request_body.ExpiresInSeconds = 3600
 	}
 	userSql, err := cfg.dbQueries.GetUserByEmail(r.Context(), request_body.Email)
 	if err != nil {
@@ -273,7 +295,25 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if match {
-		respondWithJson(w, http.StatusOK, toUser(userSql))
+		durationString := fmt.Sprintf("%vs", request_body.ExpiresInSeconds)
+		duration, err := time.ParseDuration(durationString)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error parsing duration: %v", err), err)
+			return
+		}
+		token, err := auth.MakeJWT(userSql.ID, cfg.secret_string, duration)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating token: %v", err), err)
+			return
+		}
+		userFromSql := respondBody {
+			ID: userSql.ID,
+			CreatedAt: userSql.CreatedAt,
+			UpdatedAt: userSql.UpdatedAt,
+			Email: userSql.Email,
+			Token: token,
+		}
+		respondWithJson(w, http.StatusOK, userFromSql)
 	} else {
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", nil)
 	}
@@ -286,13 +326,18 @@ func main() {
 	godotenv.Load()
 	dbUrl := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	secret_string := os.Getenv("JWT_VERIFY_KEY")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		log.Fatalf("Error creating database %v", err)
 		return
 	}
 	queries := database.New(db)
-	apiCfg := apiConfig{ dbQueries: queries, platform: platform }
+	apiCfg := apiConfig{ 
+		dbQueries: queries, 
+		platform: platform,
+		secret_string: secret_string,
+	}
 	port := "8080"
   filepath := "."
   mux := http.NewServeMux()
