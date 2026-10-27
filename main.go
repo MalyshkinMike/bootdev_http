@@ -263,7 +263,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type loginBody struct {
 		Password string `json:"password"`
 		Email string `json:"email"`
-		ExpiresInSeconds int `json:"expires_in_seconds"`
+		// ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
 	type respondBody struct {
 		ID uuid.UUID `json:"id"`
@@ -271,19 +271,18 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
     UpdatedAt time.Time `json:"updated_at"`
     Email string `json:"email"`
     Token string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
 	}
-	request_body := loginBody {
-		ExpiresInSeconds: 3600,
-	}
+	request_body := loginBody{}
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&request_body)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding json body: %v", err), err)
 		return
 	}
-	if request_body.ExpiresInSeconds > 3600 {
-		request_body.ExpiresInSeconds = 3600
-	}
+	// if request_body.ExpiresInSeconds > 60 {
+	// 	request_body.ExpiresInSeconds = 60
+	// }
 	userSql, err := cfg.dbQueries.GetUserByEmail(r.Context(), request_body.Email)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error fetching user from db: %v", err), err)
@@ -295,7 +294,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if match {
-		durationString := fmt.Sprintf("%vs", request_body.ExpiresInSeconds)
+		durationString := fmt.Sprintf("%vs", 60)
 		duration, err := time.ParseDuration(durationString)
 		if err != nil {
 			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error parsing duration: %v", err), err)
@@ -306,12 +305,24 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating token: %v", err), err)
 			return
 		}
+		refresh_token := auth.MakeRefreshToken()
+		create_token_params := database.CreateTokenParams {
+			Token: refresh_token,
+			UserID: userSql.ID,
+			ExpiresAt: time.Now().AddDate(0, 0, 60),
+		}
+		_, err = cfg.dbQueries.CreateToken(r.Context(), create_token_params)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error creating refresh_token in db: %v", err), err)
+			return
+		}
 		userFromSql := respondBody {
 			ID: userSql.ID,
 			CreatedAt: userSql.CreatedAt,
 			UpdatedAt: userSql.UpdatedAt,
 			Email: userSql.Email,
 			Token: token,
+			RefreshToken: refresh_token,
 		}
 		respondWithJson(w, http.StatusOK, userFromSql)
 	} else {
@@ -319,6 +330,59 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+	type responceBody struct {
+		Token string `json:"token"`
+	}
+	refresh_token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error getting bearer token: %v", err), err)
+		return
+	}
+	sqltoken, err := cfg.dbQueries.GetToken(r.Context(), refresh_token)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Token not found: %v", err), err)
+		return
+	}
+	// check expiration
+	if sqltoken.ExpiresAt.Compare(time.Now()) >= 0 {
+		respondWithError(w, http.StatusUnauthorized, "Token expired", nil)
+		return
+	}
+	// check for revoking
+	if sqltoken.RevokedAt.Valid && sqltoken.RevokedAt.Time.Compare(time.Now()) >= 0 {
+		respondWithError(w, http.StatusUnauthorized, "Token revoked", nil)
+		return
+	}
+	userId := sqltoken.UserID
+	hour, err := time.ParseDuration("1h")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error parsing duration: %v", err), err)
+		return
+	}
+	JWTTOken, err := auth.MakeJWT(userId, cfg.secret_string, hour)
+	
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error making access token: %v", err), err)
+		return
+	}
+	responce := responceBody{
+		Token: JWTTOken,
+	}
+	respondWithJson(w, http.StatusOK, responce)
+}
+
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+	refresh_token, err := auth.GetBearerToken(r.Header)
+	//revoke refresh token by setting revoked_at = currentTimestamp
+	err = cfg.dbQueries.RevokeToken(r.Context(), refresh_token)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error revoking refresh_token: %v", err), err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // main func
 
@@ -349,6 +413,8 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerGetChirp)
   mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
+	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
+	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
 	// mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"net/http"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 func HashPassword(password string) (string, error) {
@@ -57,4 +59,11 @@ func GetBearerToken(headers http.Header) (string, error) {
 		return "", errors.New("Got Invalid Authorization header content")
 	}
 	return token[1], nil
+}
+
+func MakeRefreshToken() string {
+	key := make([]byte, 32)
+	rand.Read(key)
+	encoded_key := hex.EncodeToString(key)
+	return encoded_key
 }
