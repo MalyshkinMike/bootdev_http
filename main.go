@@ -346,7 +346,7 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// check expiration
-	if sqltoken.ExpiresAt.Compare(time.Now()) >= 0 {
+	if sqltoken.ExpiresAt.Compare(time.Now()) <= 0 {
 		respondWithError(w, http.StatusUnauthorized, "Token expired", nil)
 		return
 	}
@@ -361,14 +361,13 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error parsing duration: %v", err), err)
 		return
 	}
-	JWTTOken, err := auth.MakeJWT(userId, cfg.secret_string, hour)
-	
+	JWTToken, err := auth.MakeJWT(userId, cfg.secret_string, hour)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error making access token: %v", err), err)
 		return
 	}
 	responce := responceBody{
-		Token: JWTTOken,
+		Token: JWTToken,
 	}
 	respondWithJson(w, http.StatusOK, responce)
 }
