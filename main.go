@@ -117,6 +117,17 @@ func toChirps(rows []database.Chirp) []Chirp {
 	return chirps
 }
 
+func (cfg *apiConfig) authenticateUser(header http.Header) (uuid.UUID, error) {
+	accessToken, err := auth.GetBearerToken(header)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	userId, err := auth.ValidateJWT(accessToken, cfg.secret_string)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return userId, nil
+}
 // middlewares
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -195,17 +206,12 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		UserId uuid.UUID `json:"user_id"`
 	}
 
-	JWTToken, err := auth.GetBearerToken(r.Header)
+	userId, err := cfg.authenticateUser(r.Header)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error getting bearer token: %v", err), err)
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error authenticateting: %v", err), err)
 		return
 	}
 
-	userId, err := auth.ValidateJWT(JWTToken, cfg.secret_string)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid JWT: %v", err), err)
-		return
-	}
 	
 	decoder := json.NewDecoder(r.Body)
 	chirp := chirpBody{}
@@ -388,21 +394,16 @@ func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) 
 		Password string `json:"password"`
 		Email string `json:"email"`
 	}
+	userId, err := cfg.authenticateUser(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error authenticateting: %v", err), err)
+		return
+	}
 	decoder := json.NewDecoder(r.Body)
 	requestData := requestBody{}
-	err := decoder.Decode(&requestData)
+	err = decoder.Decode(&requestData)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %v", err), err)
-		return
-	}
-	accessToken, err := auth.GetBearerToken(r.Header)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error getting bearer token: %v", err), err)
-		return
-	}
-	userId, err := auth.ValidateJWT(accessToken, cfg.secret_string)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid JWT: %v", err), err)
 		return
 	}
 	hashedPassword, err := auth.HashPassword(requestData.Password)
@@ -422,6 +423,35 @@ func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) 
 	}
 	usrToSend := toUser(usrSql)
 	respondWithJson(w, http.StatusOK, usrToSend)
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	chirpId := r.PathValue("id")
+	userId, err := cfg.authenticateUser(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error authenticateting: %v", err), err)
+		return
+	}
+	chirpUuid, err := uuid.Parse(chirpId)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error converting id to uuid: %v", err), err)
+		return
+	}
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpUuid)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Error getting chirp from db: %v", err), err)
+		return
+	}
+	if chirp.UserID != userId {
+		respondWithError(w, http.StatusForbidden, fmt.Sprintf("Error trying to delete other user's chirp. Chrip's user id: %v, authenticated user id: %v", chirp.UserID, userId), nil)
+		return
+	}
+	err = cfg.dbQueries.DeleteChirp(r.Context(), chirpUuid)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error deleting chirp: %v", err), err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // main func
@@ -453,6 +483,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{id}", apiCfg.handlerDeleteChirp)
   mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
