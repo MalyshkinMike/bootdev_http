@@ -383,6 +383,47 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) {
+	type requestBody struct {
+		Password string `json:"password"`
+		Email string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	requestData := requestBody{}
+	err := decoder.Decode(&requestData)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding parameters: %v", err), err)
+		return
+	}
+	accessToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error getting bearer token: %v", err), err)
+		return
+	}
+	userId, err := auth.ValidateJWT(accessToken, cfg.secret_string)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid JWT: %v", err), err)
+		return
+	}
+	hashedPassword, err := auth.HashPassword(requestData.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error hashing new password: %v", err), err)
+		return
+	}
+	params := database.UpdateUserParams {
+		ID: userId,
+		Email: requestData.Email,
+		HashedPassword: hashedPassword,
+	}
+	usrSql, err := cfg.dbQueries.UpdateUser(r.Context(), params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error updating user: %v", err), err)
+		return
+	}
+	usrToSend := toUser(usrSql)
+	respondWithJson(w, http.StatusOK, usrToSend)
+}
+
 // main func
 
 func main() {
@@ -408,6 +449,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerGetMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerGetChirp)
