@@ -27,6 +27,7 @@ type apiConfig struct {
 	dbQueries *database.Queries
 	platform string
 	secret_string string
+	polka_key string
 }
 
 type Chirp struct {
@@ -467,9 +468,18 @@ func (cfg *apiConfig) webhookPolka(w http.ResponseWriter, r *http.Request) {
 		Event string `json:"event"`
 		Data json.RawMessage `json:"data"`
 	}
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Error getting api key: %v", err), err)
+		return
+	}
+	if apiKey != cfg.polka_key {
+		respondWithError(w, http.StatusUnauthorized, "Api key not valid", nil)
+		return
+	}
 	var requestBody RequestBody
 	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&requestBody)
+	err = decoder.Decode(&requestBody)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding request body: %v", err), err)
 		return
@@ -511,6 +521,7 @@ func main() {
 	dbUrl := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	secret_string := os.Getenv("JWT_VERIFY_KEY")
+	polka_key := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		log.Fatalf("Error creating database %v", err)
@@ -521,6 +532,7 @@ func main() {
 		dbQueries: queries, 
 		platform: platform,
 		secret_string: secret_string,
+		polka_key: polka_key,
 	}
 	port := "8080"
   filepath := "."
