@@ -24,3 +24,10 @@ set
   hashed_password = $3
 where id = $1
 returning *;
+
+-- name: UpgradeUserToChirpyRed :one
+
+update users
+set is_chirpy_red = true
+where id = $1
+returning *;

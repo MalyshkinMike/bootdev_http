@@ -16,6 +16,7 @@ import (
 	 "database/sql"
 	 "github.com/MalyshkinMike/bootdev_http/internal/database"
 	 "github.com/MalyshkinMike/bootdev_http/internal/auth"
+	 "errors"
 )
 
 
@@ -41,6 +42,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email string `json:"email"`
+	IsChirpyRed bool `json:"is_chirpy_red"`
 }
 
 // helper functions
@@ -106,6 +108,7 @@ func toUser(row database.User) User {
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 		Email: row.Email,
+		IsChirpyRed: row.IsChirpyRed,
 	}
 }
 
@@ -278,6 +281,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
     Email string `json:"email"`
     Token string `json:"token"`
 		RefreshToken string `json:"refresh_token"`
+		IsChirpyRed bool `json:"is_chirpy_red"`
 	}
 	request_body := loginBody{}
 	decoder := json.NewDecoder(r.Body)
@@ -329,6 +333,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 			Email: userSql.Email,
 			Token: token,
 			RefreshToken: refresh_token,
+			IsChirpyRed: userSql.IsChirpyRed,
 		}
 		respondWithJson(w, http.StatusOK, userFromSql)
 	} else {
@@ -454,6 +459,51 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+
+// webhooks
+
+func (cfg *apiConfig) webhookPolka(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		Event string `json:"event"`
+		Data json.RawMessage `json:"data"`
+	}
+	var requestBody RequestBody
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&requestBody)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding request body: %v", err), err)
+		return
+	}
+
+	switch requestBody.Event {
+	case "user.upgraded":
+		type UpgradeUserData struct {
+			UserId uuid.UUID `json:"user_id"`
+		}
+		var upgradeUserData UpgradeUserData
+		err = json.Unmarshal(requestBody.Data, &upgradeUserData)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error decoding data: %v", err), err)
+			return
+		}
+		_, err = cfg.dbQueries.UpgradeUserToChirpyRed(r.Context(), upgradeUserData.UserId)
+		if err != nil && errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusNotFound, fmt.Sprintf("Error upgrading User: %v", err), err)
+			return
+		} else if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error upgrading User: %v", err), err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	default:
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+}
+
+
+
 // main func
 
 func main() {
@@ -487,6 +537,7 @@ func main() {
   mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.webhookPolka)
 	// mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(filepath)))
   mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
