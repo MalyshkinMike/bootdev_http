@@ -13,6 +13,11 @@ returning *;
 select * from chirps
 order by created_at asc;
 
+-- name: ListChirpsByUser :many
+select * from chirps
+where user_id = $1
+order by created_at asc;
+
 -- name: GetChirp :one
 select * from chirps
 where id = $1 limit 1;
